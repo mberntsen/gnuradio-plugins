@@ -87,3 +87,8 @@ ENV/
 
 # Rope project settings
 .ropeproject
+
+# project specific files
+workfileh.npy
+workfilel.npy
+workfiles.png

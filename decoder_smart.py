@@ -32,7 +32,8 @@ from optparse import OptionParser
 import osmosdr
 import time
 import wx
-from decoders import decoder_homeeasy
+from decoders import decoder_smart
+import math
 
 class top_block(grc_wxgui.top_block_gui):
 
@@ -48,8 +49,9 @@ class top_block(grc_wxgui.top_block_gui):
         self.freq_transition = freq_transition = 10000
         self.freq_offset = freq_offset = 0
         self.freq_cutoff = freq_cutoff = 50000
-        self.freq_center = freq_center = 433920000
-
+        self.freq_center = freq_center = 433913000
+        self.fsk_deviation_hz = fsk_deviation_hz = 32000
+        
         ##################################################
         # Blocks
         ##################################################
@@ -82,24 +84,28 @@ class top_block(grc_wxgui.top_block_gui):
         self.osmosdr_source_0.set_antenna("", 0)
         self.osmosdr_source_0.set_bandwidth(0, 0)
           
+        self.low_pass_filter_1 = filter.fir_filter_fff(1, firdes.low_pass(
+        	1, samp_rate, 20000, 20000, firdes.WIN_HAMMING, 6.76))
         self.low_pass_filter_0 = filter.fir_filter_ccf(1, firdes.low_pass(
         	1, samp_rate, freq_cutoff, freq_transition, firdes.WIN_HAMMING, 6.76))
         self.dc_blocker_xx_0 = filter.dc_blocker_cc(32, True)
         self.blocks_multiply_xx_0 = blocks.multiply_vcc(1)
-        self.blocks_complex_to_mag_0 = blocks.complex_to_mag(1)
         self.analog_sig_source_x_0 = analog.sig_source_c(samp_rate, analog.GR_COS_WAVE, freq_offset, 1, 0)
-        self.decoder = decoder_homeeasy(samp_rate)
+        self.decoder = decoder_smart(samp_rate)
+        self.analog_quadrature_demod_cf_0 = analog.quadrature_demod_cf(samp_rate/(2*math.pi*fsk_deviation_hz/8.0))
 
         ##################################################
         # Connections
         ##################################################
         self.connect((self.analog_sig_source_x_0, 0), (self.blocks_multiply_xx_0, 0))    
-        self.connect((self.blocks_complex_to_mag_0, 0), (self.decoder, 0))    
+        self.connect((self.low_pass_filter_0, 0), (self.analog_quadrature_demod_cf_0, 0))    
+        self.connect((self.analog_quadrature_demod_cf_0, 0), (self.low_pass_filter_1, 0))    
+        self.connect((self.low_pass_filter_1, 0), (self.wxgui_scopesink2_0, 0))    
+        self.connect((self.low_pass_filter_1, 0), (self.decoder, 0))    
         self.connect((self.blocks_multiply_xx_0, 0), (self.low_pass_filter_0, 0))    
         self.connect((self.dc_blocker_xx_0, 0), (self.blocks_multiply_xx_0, 1))    
-        self.connect((self.low_pass_filter_0, 0), (self.blocks_complex_to_mag_0, 0))    
+        #self.connect((self.low_pass_filter_0, 0), (self.blocks_complex_to_mag_0, 0))    
         self.connect((self.osmosdr_source_0, 0), (self.dc_blocker_xx_0, 0))    
-        self.connect((self.blocks_complex_to_mag_0, 0), (self.wxgui_scopesink2_0, 0))    
         
     def get_samp_rate(self):
         return self.samp_rate
@@ -107,9 +113,11 @@ class top_block(grc_wxgui.top_block_gui):
     def set_samp_rate(self, samp_rate):
         self.samp_rate = samp_rate
         self.analog_sig_source_x_0.set_sampling_freq(self.samp_rate)
+        self.analog_quadrature_demod_cf_0.set_gain(self.samp_rate/(2*math.pi*self.fsk_deviation_hz/8.0))
         self.low_pass_filter_0.set_taps(firdes.low_pass(1, self.samp_rate, self.freq_cutoff, self.freq_transition, firdes.WIN_HAMMING, 6.76))
+        self.low_pass_filter_1.set_taps(firdes.low_pass(1, self.samp_rate, 20000, 20000, firdes.WIN_HAMMING, 6.76))
         self.osmosdr_source_0.set_sample_rate(self.samp_rate)
-        self.decoder_homeeasy.set_sample_rate(self.samp_rate)
+        self.decoder.set_sample_rate(self.samp_rate)
         self.wxgui_scopesink2_0.set_sample_rate(self.samp_rate)
 
     def get_freq_transition(self):

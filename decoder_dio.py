@@ -32,7 +32,7 @@ from optparse import OptionParser
 import osmosdr
 import time
 import wx
-from decoders import decoder_homeeasy
+from decoders import decoder_dio
 
 class top_block(grc_wxgui.top_block_gui):
 
@@ -46,9 +46,9 @@ class top_block(grc_wxgui.top_block_gui):
         ##################################################
         self.samp_rate = samp_rate = 2000000
         self.freq_transition = freq_transition = 10000
-        self.freq_offset = freq_offset = 0
+        self.freq_offset = freq_offset = -290000
         self.freq_cutoff = freq_cutoff = 50000
-        self.freq_center = freq_center = 433920000
+        self.freq_center = freq_center = 433500000
 
         ##################################################
         # Blocks
@@ -88,7 +88,7 @@ class top_block(grc_wxgui.top_block_gui):
         self.blocks_multiply_xx_0 = blocks.multiply_vcc(1)
         self.blocks_complex_to_mag_0 = blocks.complex_to_mag(1)
         self.analog_sig_source_x_0 = analog.sig_source_c(samp_rate, analog.GR_COS_WAVE, freq_offset, 1, 0)
-        self.decoder = decoder_homeeasy(samp_rate)
+        self.decoder = decoder_dio(samp_rate)
 
         ##################################################
         # Connections
