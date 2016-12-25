@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 #         xx    : 10164 us
 ##################################################
 class decoder_homeeasy(gr.basic_block):
-    def __init__(self, sample_rate=32000, max_buffer_length=0.1):  # only default arguments here
+    def __init__(self, sample_rate=32000):  # only default arguments here
         gr.basic_block.__init__(
             self,
             name='HomeEasy decoder',
@@ -27,14 +27,14 @@ class decoder_homeeasy(gr.basic_block):
             out_sig=[]
         )
         self.sample_rate = sample_rate
-        self.buffer = np.empty((0), dtype=np.int)
         self.counts = 0
-        self.olds = None
-        self.max_buffer_length = max_buffer_length
-        self.max_buffer_size = sample_rate * max_buffer_length
+        self.oldcode = None
+        self.pulsecounter = 0
+        self.lastlevel = False
+        self.code = ''
 
     def stop(self):
-        if self.olds is not None:
+        if self.oldcode is not None:
           print ''
         return True
 
@@ -42,64 +42,47 @@ class decoder_homeeasy(gr.basic_block):
         self.sample_rate = sample_rate
 
     def general_work(self, input_items, output_items):
-        b = np.round(input_items[0] * 10000).astype(np.int)
-        self.buffer = np.append(self.buffer, b)
-
-        refvalue = (np.min(b) + np.max(b)) // 2
+        refvalue = 0.1        
+        b = input_items[0] > refvalue
+        c = np.concatenate(([self.lastlevel], b))
+        d = np.diff(c)
         
-        indexes = np.arange(len(self.buffer), dtype=np.int)
-        # get indexes with low values
-        i_l = indexes[self.buffer < refvalue]
-        # get holes in low signal (= pulses)
-        steps_l = np.diff(i_l)
-
-        min_width_h = self.sample_rate * 0.0002
-
-        indexes = np.arange(len(steps_l))
-        i2_l = indexes[steps_l > min_width_h]
-
-        last_sample = None
-        if len(i2_l) > 0:
-          # get edge starting points
-          t_lh = i_l[i2_l]
-          # get edge ending points
-          t_hl = i_l[i2_l + 1]
-
-          # calculate pulse widths
-          width_h = t_hl - t_lh# / (bitrate / 1000)
-          width_l = t_lh[1:] - t_hl[0:-1]# / (bitrate / 1000)
-          
-          s = ''
-          last_sample = 0
-          for i, pl in enumerate(width_l):
-            if pl < self.sample_rate * 0.0005:
-              s = s + '0'
-            elif pl < self.sample_rate * 0.005:
-              s = s + '1'
+        indexes = np.arange(len(input_items[0]), dtype=np.int)
+        oldi = self.pulsecounter
+        for i in indexes[d]:
+          v = b[i]
+          length = i - oldi
+          if v == True:
+            #space finished
+            if length < self.sample_rate * 0.0005:
+              self.code = self.code + '0'
+            elif length < self.sample_rate * 0.005:
+              self.code = self.code + '1'
             else:
-              if len(s) == 57:
-                self.newCode(s)
-              s = ''
-              last_sample = t_hl[i]
-          if (len(self.buffer) - t_hl[-1]) > self.sample_rate * 0.005:
-            if len(s) == 57:
-              self.newCode(s)
-            last_sample = t_hl[-1]
-        i = int(max(last_sample, len(self.buffer) - self.max_buffer_size))
-        self.buffer = self.buffer[i:]
+              if (len(self.code) == 57):
+                self.newCode()
+              self.code = ''
+          oldi = i
+        self.pulsecounter = oldi - len(input_items[0])
+        #check if ongoing space is long enough for closure
+        if (self.pulsecounter < self.sample_rate * -0.005) and \
+           (self.lastlevel == False):
+          if (len(self.code) == 57):
+            self.newCode()
+          self.code = ''
+          
+        self.lastlevel = b[-1]
         self.consume(0, len(input_items[0]))
         return 0
 
-    def newCode(self, s):
+    def newCode(self):
+        if self.oldcode <> self.code:
+          self.counts = 0
+          print ''
         self.counts = self.counts + 1
-        if self.olds == s:
-          sys.stdout.write('\r%s x %d' % (self.olds, self.counts))
-          sys.stdout.flush()
-        else:
-          self.counts = 1                  
-          self.olds = s
-          sys.stdout.write('\n%s x %d' % (self.olds, self.counts))
-          sys.stdout.flush()
+        sys.stdout.write('\r%s x %d' % (self.code, self.counts))
+        sys.stdout.flush()
+        self.oldcode = self.code
 
 class decoder_manchester(gr.basic_block):
     def __init__(self, sample_rate=32000, max_buffer_length=0.1, t_short=0.0004, t_long=0.0011, t_finish=0.0075, symbolcount=26):  # only default arguments here
@@ -214,7 +197,7 @@ class decoder_manchester(gr.basic_block):
 #         xx    :  7560 us
 ##################################################
 class decoder_selectplus(decoder_manchester):
-    def __init__(self, sample_rate=32000, max_buffer_length=0.1):  # only default arguments here
+    def __init__(self, sample_rate=32000):  # only default arguments here
         gr.basic_block.__init__(
             self,
             name='SelectPlus decoder',
@@ -222,14 +205,14 @@ class decoder_selectplus(decoder_manchester):
             out_sig=[]
         )
         self.sample_rate = sample_rate
-        self.buffer = np.empty((0), dtype=np.int)
         self.counts = 0
-        self.olds = None
-        self.max_buffer_length = max_buffer_length
-        self.max_buffer_size = sample_rate * max_buffer_length
+        self.oldcode = None
+        self.pulsecounter = 0
+        self.lastlevel = False
+        self.code = ''
 
     def stop(self):
-        if self.olds is not None:
+        if self.oldcode is not None:
           print ''
         return True
 
@@ -237,77 +220,47 @@ class decoder_selectplus(decoder_manchester):
         self.sample_rate = sample_rate
 
     def general_work(self, input_items, output_items):
-        b = np.round(input_items[0] * 10000).astype(np.int)
-        self.buffer = np.append(self.buffer, b)
-
-        refvalue = (np.min(b) + np.max(b)) // 2
+        refvalue = 0.1        
+        b = input_items[0] > refvalue
+        c = np.concatenate(([self.lastlevel], b))
+        d = np.diff(c)
         
-        indexes = np.arange(len(self.buffer), dtype=np.int)
-        # get indexes with low values
-        i_l = indexes[self.buffer < refvalue]
-        # get holes in low signal (= pulses)
-        steps_l = np.diff(i_l)
-
-        min_width_h = self.sample_rate * 0.0002
-
-        indexes = np.arange(len(steps_l))
-        i2_l = indexes[steps_l > min_width_h]
-
-        last_sample = None
-        if len(i2_l) > 0:
-          # get edge starting points
-          t_lh = i_l[i2_l]
-          # get edge ending points
-          t_hl = i_l[i2_l + 1]
-
-          # calculate pulse widths
-          width_h = t_hl - t_lh# / (bitrate / 1000)
-          width_l = t_lh[1:] - t_hl[0:-1]# / (bitrate / 1000)
-          
-          s = ''
-          last_sample = 0
-          for i, ph in enumerate(width_h):
-            if i < len(width_l):
-              pl = width_l[i]
-            
-              if ph < self.sample_rate * 0.0007:
-                s = s + '1'
-              else:
-                s = s + '111'
-              
-              if pl < self.sample_rate * 0.0007:
-                s = s + '0'
-              elif pl < self.sample_rate * 0.005:
-                s = s + '000'
-              else:
-                if len(s) >= 69:
-                  self.newCode(s)
-                s = ''
-                last_sample = t_hl[i]
-          if (len(self.buffer) - t_hl[-1]) > self.sample_rate * 0.005:
-            ph = width_h[-1]
-            if ph < self.sample_rate * 0.0007:
-              s = s + '1'
+        indexes = np.arange(len(input_items[0]), dtype=np.int)
+        oldi = self.pulsecounter
+        for i in indexes[d]:
+          v = b[i]
+          length = i - oldi
+          if v == True:
+            #space finished
+            if length < self.sample_rate * 0.0007:
+              self.code = self.code + '1'
+            elif length < self.sample_rate * 0.0015:
+              self.code = self.code + '0'
             else:
-              s = s + '111'
-            if len(s) >= 69:
-              self.newCode(s)
-            last_sample = t_hl[-1]
-        i = int(max(last_sample, len(self.buffer) - self.max_buffer_size))
-        self.buffer = self.buffer[i:]
+              if (len(self.code) == 17):
+                self.newCode()
+              self.code = ''
+          oldi = i
+        self.pulsecounter = oldi - len(input_items[0])
+        #check if ongoing space is long enough for closure
+        if (self.pulsecounter < self.sample_rate * -0.0015) and \
+           (self.lastlevel == False):
+          if (len(self.code) == 17):
+            self.newCode()
+          self.code = ''
+          
+        self.lastlevel = b[-1]
         self.consume(0, len(input_items[0]))
         return 0
 
-    def newCode(self, s):
+    def newCode(self):
+        if self.oldcode <> self.code:
+          self.counts = 0
+          print ''
         self.counts = self.counts + 1
-        if self.olds == s:
-          sys.stdout.write('\r%s x %d' % (self.olds, self.counts))
-          sys.stdout.flush()
-        else:
-          self.counts = 1                  
-          self.olds = s
-          sys.stdout.write('\n%s x %d' % (self.olds, self.counts))
-          sys.stdout.flush()
+        sys.stdout.write('\r%s x %d' % (self.code, self.counts))
+        sys.stdout.flush()
+        self.oldcode = self.code
 
 ##################################################
 # Protocol timing Elro ab440r:
