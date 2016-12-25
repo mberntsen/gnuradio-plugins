@@ -10,23 +10,14 @@ import numpy as np
 import sys
 import matplotlib.pyplot as plt
 
-
-##################################################
-# Protocol timing HomeEasy:
-# pulse   short :   250 us
-# space   short :   285 us
-#         long  :  1293 us
-#         xx    : 10164 us
-##################################################
-class decoder_homeeasy(gr.basic_block):
-    def __init__(self, sample_rate=32000):  # only default arguments here
+class decoder_base(gr.basic_block):
+    def __init__(self, name='base decoder'):  # only default arguments here
         gr.basic_block.__init__(
             self,
-            name='HomeEasy decoder',
+            name=name,
             in_sig=[np.float32],
             out_sig=[]
         )
-        self.sample_rate = sample_rate
         self.counts = 0
         self.oldcode = None
         self.pulsecounter = 0
@@ -41,16 +32,45 @@ class decoder_homeeasy(gr.basic_block):
     def set_sample_rate(self, samp_rate):
         self.sample_rate = sample_rate
 
-    def general_work(self, input_items, output_items):
+    def find_edges(self, input_items):
         refvalue = 0.1        
         b = input_items[0] > refvalue
         c = np.concatenate(([self.lastlevel], b))
         d = np.diff(c)
-        
         indexes = np.arange(len(input_items[0]), dtype=np.int)
+        self.lastlevel = b[-1]
+        return [(b[i], i) for i in indexes[d]]
+
+    def newCode(self):
+        if self.oldcode <> self.code:
+          self.counts = 0
+          print ''
+        self.counts = self.counts + 1
+        sys.stdout.write('\r%s x %d' % (self.code, self.counts))
+        sys.stdout.flush()
+        self.oldcode = self.code
+
+##################################################
+# Protocol timing HomeEasy:
+# pulse   short :   250 us
+# space   short :   285 us
+#         long  :  1293 us
+#         xx    : 10164 us
+##################################################
+class decoder_homeeasy(decoder_base):
+    def __init__(self, sample_rate=32000):  # only default arguments here
+        decoder_base.__init__(
+            self,
+            name='HomeEasy decoder'
+        )
+        self.sample_rate = sample_rate
+
+    def set_sample_rate(self, samp_rate):
+        self.sample_rate = sample_rate
+
+    def general_work(self, input_items, output_items):
         oldi = self.pulsecounter
-        for i in indexes[d]:
-          v = b[i]
+        for v, i in self.find_edges(input_items):
           length = i - oldi
           if v == True:
             #space finished
@@ -71,18 +91,8 @@ class decoder_homeeasy(gr.basic_block):
             self.newCode()
           self.code = ''
           
-        self.lastlevel = b[-1]
         self.consume(0, len(input_items[0]))
         return 0
-
-    def newCode(self):
-        if self.oldcode <> self.code:
-          self.counts = 0
-          print ''
-        self.counts = self.counts + 1
-        sys.stdout.write('\r%s x %d' % (self.code, self.counts))
-        sys.stdout.flush()
-        self.oldcode = self.code
 
 class decoder_manchester(gr.basic_block):
     def __init__(self, sample_rate=32000, max_buffer_length=0.1, t_short=0.0004, t_long=0.0011, t_finish=0.0075, symbolcount=26):  # only default arguments here
@@ -196,39 +206,20 @@ class decoder_manchester(gr.basic_block):
 #         long  :  1125 us
 #         xx    :  7560 us
 ##################################################
-class decoder_selectplus(decoder_manchester):
+class decoder_selectplus(decoder_base):
     def __init__(self, sample_rate=32000):  # only default arguments here
-        gr.basic_block.__init__(
+        decoder_base.__init__(
             self,
-            name='SelectPlus decoder',
-            in_sig=[np.float32],
-            out_sig=[]
+            name='SelectPlus decoder'
         )
         self.sample_rate = sample_rate
-        self.counts = 0
-        self.oldcode = None
-        self.pulsecounter = 0
-        self.lastlevel = False
-        self.code = ''
-
-    def stop(self):
-        if self.oldcode is not None:
-          print ''
-        return True
 
     def set_sample_rate(self, samp_rate):
         self.sample_rate = sample_rate
 
     def general_work(self, input_items, output_items):
-        refvalue = 0.1        
-        b = input_items[0] > refvalue
-        c = np.concatenate(([self.lastlevel], b))
-        d = np.diff(c)
-        
-        indexes = np.arange(len(input_items[0]), dtype=np.int)
         oldi = self.pulsecounter
-        for i in indexes[d]:
-          v = b[i]
+        for v, i in self.find_edges(input_items):
           length = i - oldi
           if v == True:
             #space finished
@@ -249,18 +240,8 @@ class decoder_selectplus(decoder_manchester):
             self.newCode()
           self.code = ''
           
-        self.lastlevel = b[-1]
         self.consume(0, len(input_items[0]))
         return 0
-
-    def newCode(self):
-        if self.oldcode <> self.code:
-          self.counts = 0
-          print ''
-        self.counts = self.counts + 1
-        sys.stdout.write('\r%s x %d' % (self.code, self.counts))
-        sys.stdout.flush()
-        self.oldcode = self.code
 
 ##################################################
 # Protocol timing Elro ab440r:
