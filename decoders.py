@@ -279,7 +279,7 @@ class decoder_elro_ab440r(decoder_base):
 #         xl    :  2661 us = start
 #         xxl   : 10096 us = message spacing
 ##################################################
-class decoder_dio(decoder_base_debug):
+class decoder_dio(decoder_base):
     def __init__(self, sample_rate=32000):  # only default arguments here
         super(decoder_dio, self).__init__(
             name='DIO decoder',
@@ -385,4 +385,50 @@ class decoder_smart(decoder_base):
         self.consume(0, len(input_items[0]))
         return 0
 
+##################################################
+# Protocol timing DIO:
+# mark    short :   146 us = 0
+#         long  :   438 us = 1
+# space   short :   146 us
+#         long  :   438 us
+#         xl    :  4000 us = message spacing
+##################################################
+class decoder_impuls(decoder_base):
+    def __init__(self, sample_rate=32000):  # only default arguments here
+        super(decoder_impuls, self).__init__(
+            name='DIO decoder',
+            threshold = 0.1
+        )
+        self.sample_rate = sample_rate
+
+    def set_sample_rate(self, samp_rate):
+        self.sample_rate = sample_rate
+
+    def general_work(self, input_items, output_items):
+        oldi = self.pulsecounter
+        for v, i in self.find_edges(input_items):
+          length = i - oldi
+          if v == True:
+            if length > self.sample_rate * 0.003:
+              if (len(self.code) == 25):
+                self.newCode()
+              self.code = ''
+          else:
+            if length < self.sample_rate * 0.0001:
+              pass
+            elif length < self.sample_rate * 0.0003:
+              self.code = self.code + '1'
+            else:
+              self.code = self.code + '0'
+          oldi = i
+        self.pulsecounter = oldi - len(input_items[0])
+        #check if ongoing space is long enough for closure
+        if (self.pulsecounter < self.sample_rate * -0.003) and \
+           (self.lastlevel == False):
+          if (len(self.code) == 25):
+            self.newCode()
+          self.code = ''
+          
+        self.consume(0, len(input_items[0]))
+        return 0
 
