@@ -9,6 +9,7 @@ from gnuradio import gr
 import numpy as np
 import sys
 from string import maketrans
+import json
 
 class decoder_base(gr.basic_block):
     def __init__(self, name='base decoder', threshold=0.1):  # only default arguments here
@@ -50,7 +51,7 @@ class decoder_base(gr.basic_block):
         self.oldcode = self.code
 
 class decoder_base_fsk(gr.basic_block):
-    def __init__(self, name='base fsk decoder', threshold=0.1):  # only default arguments here
+    def __init__(self, name='base fsk decoder', threshold=0.1, threshold2=0.1):  # only default arguments here
         super(decoder_base_fsk, self).__init__(
             name=name,
             in_sig=[np.float32, np.float32],
@@ -62,6 +63,7 @@ class decoder_base_fsk(gr.basic_block):
         self.lastlevel = False
         self.code = ''
         self.threshold = threshold
+        self.threshold2 = threshold2
         self.signalvalid = False
 
     def stop(self):
@@ -76,7 +78,7 @@ class decoder_base_fsk(gr.basic_block):
         length = min(len(input_items[0]), len(input_items[1]))
         in1 = input_items[0][:length]
         in2 = input_items[1][:length]
-        in1 = in1[in2 > 0.1]
+        in1 = in1[in2 > self.threshold2]
         self.signalvalid = len(in1) > 0
         if len(in1) > 0:
           #self.threshold = (np.min(in1) + np.max(in1)) / 2
@@ -90,13 +92,7 @@ class decoder_base_fsk(gr.basic_block):
           return []
 
     def newCode(self):
-        if self.oldcode <> self.code:
-          self.counts = 0
-          print ''
-        self.counts = self.counts + 1
-        sys.stdout.write('\r%s : %s x %d' % (len(self.code), self.code, self.counts))
-        sys.stdout.flush()
-        self.oldcode = self.code
+      pass
 
 class decoder_base_debug(decoder_base):
   def __init__(self, name='base debug decoder', threshold=0.1):
@@ -176,22 +172,19 @@ class decoder_homeeasy(decoder_base_debug):
           length = i - oldi
           if v == True:
             #space finished
+            if length < self.sample_rate * 0.0002:
+              self.code = '' # code will be invalid, implementation could be better?
             if length < self.sample_rate * 0.0005:
               self.code = self.code + '0'
             elif length < self.sample_rate * 0.005:
               self.code = self.code + '1'
             else:
-              if (len(self.code) == 57):
-                self.newCode()
+              self.code = ''
+            if (len(self.code) == 57):
+              self.newCode()
               self.code = ''
           oldi = i
         self.pulsecounter = oldi - len(input_items[0])
-        #check if ongoing space is long enough for closure
-        if (self.pulsecounter < self.sample_rate * -0.005) and \
-           (self.lastlevel == False):
-          if (len(self.code) == 57):
-            self.newCode()
-          self.code = ''
           
         self.consume(0, len(input_items[0]))
         return 0
@@ -354,6 +347,8 @@ class decoder_elro_ab440r(decoder_base):
 #         long  :  1306 us = 1
 #         xl    :  2661 us = start
 #         xxl   : 10096 us = message spacing
+#
+# code seems sort of manchester, every data-bit consists of a set of 2 bits
 ##################################################
 class decoder_dio(decoder_base):
     def __init__(self, sample_rate=32000):  # only default arguments here
@@ -378,18 +373,17 @@ class decoder_dio(decoder_base):
               self.code = self.code + '1'
             elif length < self.sample_rate * 0.005:
               self.code = ''
-            else:
-              if (len(self.code) == 64):
-                self.newCode()
+            if (len(self.code) == 64):
+              self.code = self.code[::2] #manchester style
+              self.code = {'address': int(self.code[0:26], 2),
+                           'global' : int(self.code[26:27], 2),
+                           'state'  : int(self.code[27:28], 2),
+                           'slider' : int(self.code[28:30], 2),
+                           'button' : int(self.code[30:32], 2)}
+              self.newCode()
               self.code = ''
           oldi = i
         self.pulsecounter = oldi - len(input_items[0])
-        #check if ongoing space is long enough for closure
-        if (self.pulsecounter < self.sample_rate * -0.005) and \
-           (self.lastlevel == False):
-          if (len(self.code) == 64):
-            self.newCode()
-          self.code = ''
           
         self.consume(0, len(input_items[0]))
         return 0
@@ -407,11 +401,12 @@ class decoder_dio(decoder_base):
 # the signal starts with about 325 high/low pulses, but these are removed
 # by filtering op the keycode length (104 bytes manchester)
 ##################################################
-class decoder_smart(decoder_base):
+class decoder_smart(decoder_base_fsk):
     def __init__(self, sample_rate=32000):  # only default arguments here
         super(decoder_smart, self).__init__(
             name='Smart key fob decoder',
-            threshold = 0
+            threshold = 0,
+            threshold2 = 0.005
         )
         self.sample_rate = sample_rate
         self.is_decoding = False
@@ -420,7 +415,11 @@ class decoder_smart(decoder_base):
         self.sample_rate = sample_rate
 
     def general_work(self, input_items, output_items):
+        samp_length = min(len(input_items[0]), len(input_items[1]))
         oldi = self.pulsecounter
+        if self.signalvalid and not self.is_decoding:
+          self.is_decoding = True
+          self.code = ''
         for v, i in self.find_edges(input_items):
           length = i - oldi
           if length > 200:
@@ -430,12 +429,6 @@ class decoder_smart(decoder_base):
                 self.code = self.code + '0'
               elif length < self.sample_rate * 0.001:
                 self.code = self.code + '00'
-              else:
-                if (len(self.code[::2]) == 104):
-                  self.code = self.code[::2]
-                  self.newCode()
-                  self.is_decoding = False
-                self.code = ''
             elif (v == False):
               #mark finished
               if length < self.sample_rate * 0.000375:
@@ -446,19 +439,20 @@ class decoder_smart(decoder_base):
                   self.code = self.code + '11'
               else:
                 self.code = ''
-                self.is_decoding = True
           oldi = i
         self.pulsecounter = oldi - len(input_items[0])
-        #check if ongoing space is long enough for closure
-        if (self.pulsecounter < self.sample_rate * -0.001) and \
-           (self.lastlevel == False):
-          if (len(self.code[::2]) == 104):
-            self.code = self.code[::2]
+        if (not self.signalvalid) and (self.is_decoding):
+          self.is_decoding = False
+          self.code = self.code[::2]
+          if (len(self.code) == 104):
+            self.code = {'address': int(self.code[:48], 2),
+                         'key'    : int(self.code[48:56], 2),
+                         'rolling': int(self.code[56:104], 2)}
             self.newCode()
-            self.is_decoding = False
           self.code = ''
           
-        self.consume(0, len(input_items[0]))
+        self.consume(0, samp_length)
+        self.consume(1, samp_length)
         return 0
 
 ##################################################
@@ -515,11 +509,12 @@ class decoder_impuls(decoder_base):
 # space   short :   106 us = 0
 #         long  :   194 us = 00
 ##################################################
-class decoder_volvo(decoder_base_fsk_debug):
+class decoder_volvo(decoder_base_fsk):
     def __init__(self, sample_rate=32000):  # only default arguments here
         super(decoder_volvo, self).__init__(
             name='Volvo key fob decoder',
-            threshold = 0
+            threshold = 0,
+            threshold2 = 0.1
         )
         self.sample_rate = sample_rate
         self.is_decoding = False
@@ -544,7 +539,7 @@ class decoder_volvo(decoder_base_fsk_debug):
             elif length < self.sample_rate * 0.000250:
               self.code = self.code + '00'
             else:
-              self.code = self.code + 'X'
+              print 'X'
           elif (v == False):
             #mark finished
             if length < self.sample_rate * 0.000050:
@@ -554,7 +549,7 @@ class decoder_volvo(decoder_base_fsk_debug):
             elif length < self.sample_rate * 0.000250:
               self.code = self.code + '11'
             else:
-              self.code = self.code + 'X'
+              print 'X'
           oldi = i
         self.pulsecounter = oldi - samp_length
         if (not self.signalvalid) and (self.is_decoding):
@@ -562,13 +557,16 @@ class decoder_volvo(decoder_base_fsk_debug):
           self.code = self.code[::2] # because manchester code
           lastbits = self.code[-2:]
           self.code = self.code[:-2] # bullshit part
-          rollingcode = self.code[-80:]
-          keycode = self.code[-152:-80]
-          print keycode, rollingcode, 
-          if lastbits == '11':
-            print 'reversed'
-          else:
-            print ''
+          #rollingcode = self.code[-80:]
+          #eycode = self.code[-112:-80]
+          #address = self.code[-152:-112]
+          #reverse = lastbits == '11'
+          self.code = {'address': self.code[-152:-112],
+                       'key'    : self.code[-112:-80],
+                       'rolling': self.code[-80:],
+                       'inversed': lastbits == '11'}
+          self.newCode()
+          self.code = ''
           #self.code = self.code[-154:] #start of non 101010101010 part
           #if (self.code[-200] == '1'):
           #  intab = "01"

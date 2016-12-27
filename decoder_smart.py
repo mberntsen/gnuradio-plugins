@@ -65,7 +65,7 @@ class top_block(grc_wxgui.top_block_gui):
         	t_scale=0.001,
         	ac_couple=False,
         	xy_mode=False,
-        	num_inputs=1,
+        	num_inputs=2,
         	trig_mode=wxgui.TRIG_MODE_AUTO,
         	y_axis_label="signal",
         )
@@ -93,6 +93,7 @@ class top_block(grc_wxgui.top_block_gui):
         self.analog_sig_source_x_0 = analog.sig_source_c(samp_rate, analog.GR_COS_WAVE, freq_offset, 1, 0)
         self.decoder = decoder_smart(samp_rate)
         self.analog_quadrature_demod_cf_0 = analog.quadrature_demod_cf(samp_rate/(2*math.pi*fsk_deviation_hz/8.0))
+        self.blocks_complex_to_mag_0 = blocks.complex_to_mag(1)
 
         ##################################################
         # Connections
@@ -104,9 +105,11 @@ class top_block(grc_wxgui.top_block_gui):
         self.connect((self.low_pass_filter_1, 0), (self.decoder, 0))    
         self.connect((self.blocks_multiply_xx_0, 0), (self.low_pass_filter_0, 0))    
         self.connect((self.dc_blocker_xx_0, 0), (self.blocks_multiply_xx_0, 1))    
-        #self.connect((self.low_pass_filter_0, 0), (self.blocks_complex_to_mag_0, 0))    
         self.connect((self.osmosdr_source_0, 0), (self.dc_blocker_xx_0, 0))    
-        
+        self.connect((self.low_pass_filter_0, 0), (self.blocks_complex_to_mag_0, 0))    
+        self.connect((self.blocks_complex_to_mag_0, 0), (self.decoder, 1))    
+        self.connect((self.blocks_complex_to_mag_0, 0), (self.wxgui_scopesink2_0, 1))    
+
     def get_samp_rate(self):
         return self.samp_rate
 

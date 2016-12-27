@@ -28,12 +28,13 @@ from gnuradio.filter import firdes
 from gnuradio.wxgui import fftsink2
 from gnuradio.wxgui import scopesink2
 from grc_gnuradio import wxgui as grc_wxgui
+from grc_gnuradio import blks2 as grc_blks2
 from optparse import OptionParser
 import osmosdr
 import time
 import wx
 from decoders import decoder_dio
-
+from grc_gnuradio import blks2 as grc_blks2
 class top_block(grc_wxgui.top_block_gui):
 
     def __init__(self):
@@ -89,6 +90,8 @@ class top_block(grc_wxgui.top_block_gui):
         self.blocks_complex_to_mag_0 = blocks.complex_to_mag(1)
         self.analog_sig_source_x_0 = analog.sig_source_c(samp_rate, analog.GR_COS_WAVE, freq_offset, 1, 0)
         self.decoder = decoder_dio(samp_rate)
+        #self.blocks_file_sink_0 = blocks.file_sink(gr.sizeof_char*1, "codes.txt", True)
+        #self.blocks_file_sink_0.set_unbuffered(False)
 
         ##################################################
         # Connections
@@ -100,6 +103,7 @@ class top_block(grc_wxgui.top_block_gui):
         self.connect((self.low_pass_filter_0, 0), (self.blocks_complex_to_mag_0, 0))    
         self.connect((self.osmosdr_source_0, 0), (self.dc_blocker_xx_0, 0))    
         self.connect((self.blocks_complex_to_mag_0, 0), (self.wxgui_scopesink2_0, 0))    
+        #self.connect((self.decoder, 0), (self.blocks_file_sink_0, 0))
         
     def get_samp_rate(self):
         return self.samp_rate
