@@ -538,33 +538,47 @@ class decoder_volvo(decoder_base_fsk_debug):
           if (v == True):
             #space finished
             if length < self.sample_rate * 0.000050:
-              pass
+              self.code = self.code + '_'
             elif length < self.sample_rate * 0.000110:
               self.code = self.code + '0'
             elif length < self.sample_rate * 0.000250:
               self.code = self.code + '00'
+            else:
+              self.code = self.code + 'X'
           elif (v == False):
             #mark finished
             if length < self.sample_rate * 0.000050:
-              pass
+              self.code = self.code + '_'
             elif length < self.sample_rate * 0.000150:
               self.code = self.code + '1'
             elif length < self.sample_rate * 0.000250:
               self.code = self.code + '11'
+            else:
+              self.code = self.code + 'X'
           oldi = i
         self.pulsecounter = oldi - samp_length
         if (not self.signalvalid) and (self.is_decoding):
           self.is_decoding = False
           self.code = self.code[::2] # because manchester code
-          self.code = self.code[-154:] #start of non 101010101010 part
-          if (self.code[-154] == '1'):
-            intab = "01"
-            outtab = "10"
-            trantab = maketrans(intab, outtab)
-            self.code = self.code.translate(trantab)
-            print self.code[-82:-2], 'T' # rolling code part
+          lastbits = self.code[-2:]
+          self.code = self.code[:-2] # bullshit part
+          rollingcode = self.code[-80:]
+          keycode = self.code[-152:-80]
+          print keycode, rollingcode, 
+          if lastbits == '11':
+            print 'reversed'
           else:
-            print self.code[-82:-2] # rolling code part
+            print ''
+          #self.code = self.code[-154:] #start of non 101010101010 part
+          #if (self.code[-200] == '1'):
+          #  intab = "01"
+          #  outtab = "10"
+          #  trantab = maketrans(intab, outtab)
+          #  self.code = self.code.translate(trantab)
+            #print self.code[-82:-2], 'T' # rolling code part
+          #else:
+            #print self.code[-82:-2] # rolling code part
+          #print self.code[-238:]        
           #self.newCode()
           
         self.consume(0, samp_length)
