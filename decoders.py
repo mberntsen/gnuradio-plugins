@@ -8,6 +8,7 @@
 from gnuradio import gr
 import numpy as np
 import sys
+from string import maketrans
 
 class decoder_base(gr.basic_block):
     def __init__(self, name='base decoder', threshold=0.1):  # only default arguments here
@@ -48,6 +49,55 @@ class decoder_base(gr.basic_block):
         sys.stdout.flush()
         self.oldcode = self.code
 
+class decoder_base_fsk(gr.basic_block):
+    def __init__(self, name='base fsk decoder', threshold=0.1):  # only default arguments here
+        super(decoder_base_fsk, self).__init__(
+            name=name,
+            in_sig=[np.float32, np.float32],
+            out_sig=[]
+        )
+        self.counts = 0
+        self.oldcode = None
+        self.pulsecounter = 0
+        self.lastlevel = False
+        self.code = ''
+        self.threshold = threshold
+        self.signalvalid = False
+
+    def stop(self):
+        if self.oldcode is not None:
+          print ''
+        return True
+
+    def set_sample_rate(self, samp_rate):
+        self.sample_rate = sample_rate
+
+    def find_edges(self, input_items):
+        length = min(len(input_items[0]), len(input_items[1]))
+        in1 = input_items[0][:length]
+        in2 = input_items[1][:length]
+        in1 = in1[in2 > 0.1]
+        self.signalvalid = len(in1) > 0
+        if len(in1) > 0:
+          #self.threshold = (np.min(in1) + np.max(in1)) / 2
+          b = in1 > self.threshold
+          c = np.concatenate(([self.lastlevel], b))
+          d = np.diff(c)
+          indexes = np.arange(len(in1), dtype=np.int)
+          self.lastlevel = b[-1]
+          return [(b[i], i) for i in indexes[d]]
+        else:
+          return []
+
+    def newCode(self):
+        if self.oldcode <> self.code:
+          self.counts = 0
+          print ''
+        self.counts = self.counts + 1
+        sys.stdout.write('\r%s : %s x %d' % (len(self.code), self.code, self.counts))
+        sys.stdout.flush()
+        self.oldcode = self.code
+
 class decoder_base_debug(decoder_base):
   def __init__(self, name='base debug decoder', threshold=0.1):
     super(decoder_base_debug, self).__init__(
@@ -75,6 +125,32 @@ class decoder_base_debug(decoder_base):
       oldi = i
     return edges
 
+class decoder_base_fsk_debug(decoder_base_fsk):
+  def __init__(self, name='base fsk debug decoder', threshold=0.1):
+    super(decoder_base_fsk_debug, self).__init__(
+      name=name,
+      threshold = threshold
+    )
+    self.wh = np.empty((0), np.int)
+    self.wl = np.empty((0), np.int)
+
+  def stop(self):
+    np.save('workfileh.npy', self.wh)
+    np.save('workfilel.npy', self.wl)
+    return super(decoder_base_fsk_debug, self).stop()
+
+  def find_edges(self, input_items):
+    edges = super(decoder_base_fsk_debug, self).find_edges(input_items)
+    oldi = self.pulsecounter
+    for v, i in edges:
+      length = i - oldi
+      if v == True:
+        #space finished
+        self.wl = np.append(self.wl, [length])
+      else:
+        self.wh = np.append(self.wh, [length])
+      oldi = i
+    return edges
 
 ##################################################
 # Protocol timing HomeEasy:
@@ -430,5 +506,68 @@ class decoder_impuls(decoder_base):
           self.code = ''
           
         self.consume(0, len(input_items[0]))
+        return 0
+
+##################################################
+# Protocol timing Smart key fob:
+# mark    short :    66 us = 1
+#         long  :   154 us = 11
+# space   short :   106 us = 0
+#         long  :   194 us = 00
+##################################################
+class decoder_volvo(decoder_base_fsk_debug):
+    def __init__(self, sample_rate=32000):  # only default arguments here
+        super(decoder_volvo, self).__init__(
+            name='Volvo key fob decoder',
+            threshold = 0
+        )
+        self.sample_rate = sample_rate
+        self.is_decoding = False
+
+    def set_sample_rate(self, samp_rate):
+        self.sample_rate = sample_rate
+
+    def general_work(self, input_items, output_items):
+        samp_length = min(len(input_items[0]), len(input_items[1]))
+        oldi = self.pulsecounter
+        if self.signalvalid and not self.is_decoding:
+          self.is_decoding = True
+          self.code = ''
+        for v, i in self.find_edges(input_items):
+          length = i - oldi
+          if (v == True):
+            #space finished
+            if length < self.sample_rate * 0.000050:
+              pass
+            elif length < self.sample_rate * 0.000110:
+              self.code = self.code + '0'
+            elif length < self.sample_rate * 0.000250:
+              self.code = self.code + '00'
+          elif (v == False):
+            #mark finished
+            if length < self.sample_rate * 0.000050:
+              pass
+            elif length < self.sample_rate * 0.000150:
+              self.code = self.code + '1'
+            elif length < self.sample_rate * 0.000250:
+              self.code = self.code + '11'
+          oldi = i
+        self.pulsecounter = oldi - samp_length
+        if (not self.signalvalid) and (self.is_decoding):
+          self.is_decoding = False
+          self.code = self.code[::2] # because manchester code
+          self.code = self.code[-154:] #start of non 101010101010 part
+          if (self.code[-154] == '1'):
+            intab = "01"
+            outtab = "10"
+            trantab = maketrans(intab, outtab)
+            self.code = self.code.translate(trantab)
+            print self.code[-82:-2], 'T' # rolling code part
+          else:
+            print self.code[-82:-2] # rolling code part
+          #self.newCode()
+          
+        self.consume(0, samp_length)
+        self.consume(1, samp_length)
         return 0
 
