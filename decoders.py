@@ -583,3 +583,213 @@ class decoder_volvo(decoder_base_fsk):
         self.consume(1, samp_length)
         return 0
 
+##################################################
+# Protocol timing Conrad BEL8006:
+# mark    short :   146 us = 0
+#         long  :   438 us = 1
+# space   short :   146 us
+#         long  :   438 us
+#         xl    :  4000 us = message spacing
+##################################################
+class decoder_bel8006(decoder_base):
+    def __init__(self, sample_rate=32000):  # only default arguments here
+        super(decoder_bel8006, self).__init__(
+            name='bel8006 decoder',
+            threshold = 0.1
+        )
+        self.sample_rate = sample_rate
+        self.code = []
+        self.code2 = ''
+
+    def set_sample_rate(self, samp_rate):
+        self.sample_rate = sample_rate
+
+    def bcd_to_int(self, bcd):
+        return (bcd >> 4) * 10 + (bcd & 0x0F)
+
+    def validate_checksum(self):
+        c = 0
+        for i in self.code[1:-2]:
+          c = c ^ i
+        return c == self.code[-1]
+                  
+
+    def general_work(self, input_items, output_items):
+        oldi = self.pulsecounter
+        for v, i in self.find_edges(input_items):
+          length = i - oldi
+          if v == False: # high pulse
+            if length < self.sample_rate * 0.0001:
+              pass
+            elif length < self.sample_rate * 0.0003:
+              self.code2 = self.code2 + '0'
+            elif length < self.sample_rate * 0.0005:
+              self.code2 = self.code2 + '1'
+            else:
+              self.code2 = ''
+
+            if len(self.code2) == 8:
+              self.code.append(int(self.code2[0:8], 2))
+              self.code2 = ''
+              if self.code[0] == 169:
+                if (len(self.code) == 14) and self.validate_checksum():
+                  self.code = {
+                    'opcode': self.code[0],
+                    'seccode': self.bcd_to_int(self.code[1]) * 100 + self.bcd_to_int(self.code[2]),
+                    'u1': self.code[3],
+                    'u2': self.code[4],
+                    'date': {
+                      'd': self.bcd_to_int(self.code[5]),
+                      'h': self.bcd_to_int(self.code[6]),
+                      'm': self.bcd_to_int(self.code[7]),
+                      's': self.bcd_to_int(self.code[8])
+                    },
+                    'cal': {
+                      'd': self.bcd_to_int(self.code[9]),
+                      'h': self.bcd_to_int(self.code[10]),
+                      'm': self.bcd_to_int(self.code[11])
+                    },
+                    'valve': self.code[12]}
+                  self.newCode()
+                  self.code = []
+              elif self.code[0] == 170:
+                if len(self.code) == 20:
+                  self.newCode()
+                  self.code = []
+          oldi = i
+        self.pulsecounter = oldi - len(input_items[0])
+          
+        self.consume(0, len(input_items[0]))
+        return 0
+
+class decoder_symbol(decoder_base_fsk):
+    def __init__(self, sample_rate=32000):  # only default arguments here
+        super(decoder_symbol, self).__init__(
+            name='symbol barcode scanner decoder',
+            threshold = 0,
+            threshold2 = 0.005
+        )
+        self.sample_rate = sample_rate
+        self.is_decoding = False
+
+    def set_sample_rate(self, samp_rate):
+        self.sample_rate = sample_rate
+
+    def general_work(self, input_items, output_items):
+        samp_length = min(len(input_items[0]), len(input_items[1]))
+        oldi = self.pulsecounter
+        if self.signalvalid and not self.is_decoding:
+          self.is_decoding = True
+          self.code = ''
+        for v, i in self.find_edges(input_items):
+          length = i - oldi
+          if v == True:
+            self.code = self.code + '0' * round(length / 96.0)
+#            print 'L %5.2f' % (length / 96.0)
+          else:
+            self.code = self.code + '1' * round(length / 105.0)
+#            print 'H %5.2f' % (length / 105.0)
+#          print v, length
+#          if length > 200:
+#            if (v == True) and self.is_decoding:
+#              #space finished
+#              if length < self.sample_rate * 0.000375:
+#                self.code = self.code + '0'
+#              elif length < self.sample_rate * 0.001:
+#                self.code = self.code + '00'
+#            elif (v == False):
+#              #mark finished
+#              if length < self.sample_rate * 0.000375:
+#                if self.is_decoding:
+#                  self.code = self.code + '1'
+#              elif length < self.sample_rate * 0.001:
+#                if self.is_decoding:
+#                  self.code = self.code + '11'
+#              else:
+#                self.code = ''
+          oldi = i
+        self.pulsecounter = oldi - len(input_items[0])
+        if (not self.signalvalid) and (self.is_decoding):
+          self.is_decoding = False
+          print self.code
+          #self.code = self.code[::2]
+          #if (len(self.code) == 104):
+          #  self.code = {'address': int(self.code[:48], 2),
+          #               'key'    : int(self.code[48:56], 2),
+          #               'rolling': int(self.code[56:104], 2)}
+          #  self.newCode()
+          #self.code = ''
+          
+        self.consume(0, samp_length)
+        self.consume(1, samp_length)
+        return 0
+
+##################################################
+# Protocol timing gate1:
+# mark    short :   283 us = 1
+#         long  :   566 us = 11
+#         xl    :  2344 us
+# space   short :   283 us = 0
+#         long  :   566 us = 00
+#         xl    :  2344 us
+#
+# message starts with 010101010101010
+# then high (xl), low (xl)
+##################################################
+class decoder_gate1(decoder_base):
+    def __init__(self, sample_rate=32000):  # only default arguments here
+        super(decoder_gate1, self).__init__(
+            name='gate1 decoder',
+            threshold = 0.1
+        )
+        self.sample_rate = sample_rate
+
+    def set_sample_rate(self, samp_rate):
+        self.sample_rate = sample_rate
+
+    def general_work(self, input_items, output_items):
+        oldi = self.pulsecounter
+        for v, i in self.find_edges(input_items):
+          length = i - oldi
+          if v == True: #end of low pulse
+            if length < self.sample_rate * 0.0002:
+              pass
+            elif length < self.sample_rate * 0.0004:
+              self.code = self.code + '0'
+            elif length < self.sample_rate * 0.0008:
+              self.code = self.code + '00'
+            else:
+              pass
+          else:
+            if length < self.sample_rate * 0.0002:
+              pass
+            elif length < self.sample_rate * 0.0004:
+              self.code = self.code + '1'
+            elif length < self.sample_rate * 0.0008:
+              self.code = self.code + '11'
+            else:
+              if len(self.code) == 192:
+                self.code = self.code[1:]
+                self.code = self.code[::3]
+                self.code = {
+                  'serial': int(self.code[0:32], 2),
+                  'rolling': int(self.code[32:64], 2)}
+                self.newCode()
+              self.code = ''
+          oldi = i
+        self.pulsecounter = oldi - len(input_items[0])
+        #check if ongoing space is long enough for closure
+        if (self.pulsecounter < self.sample_rate * -0.003) and \
+           (self.lastlevel == False):
+          if len(self.code) == 192:
+            self.code = self.code[1:]
+            self.code = self.code[::3]
+            self.code = {
+              'serial': int(self.code[0:32], 2),
+              'rolling': int(self.code[32:64], 2)}
+            self.newCode()
+          self.code = ''
+          
+        self.consume(0, len(input_items[0]))
+        return 0
+
