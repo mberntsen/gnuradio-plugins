@@ -78,12 +78,11 @@ class top_block(grc_wxgui.top_block_gui):
         self.osmosdr_source_0.set_gain_mode(False, 0)
         self.osmosdr_source_0.set_gain(14, 0)
         self.osmosdr_source_0.set_if_gain(40, 0)
-        self.osmosdr_source_0.set_bb_gain(20, 0)
+        self.osmosdr_source_0.set_bb_gain(40, 0)
         self.osmosdr_source_0.set_antenna("", 0)
         self.osmosdr_source_0.set_bandwidth(0, 0)
-          
-        self.low_pass_filter_0 = filter.fir_filter_ccf(1, firdes.low_pass(
-        	1, samp_rate, freq_cutoff, freq_transition, firdes.WIN_HAMMING, 6.76))
+
+        self.low_pass_filter_0 = filter.fir_filter_ccf(1, firdes.low_pass(1, samp_rate, freq_cutoff, freq_transition, firdes.WIN_HAMMING, 6.76))
         self.dc_blocker_xx_0 = filter.dc_blocker_cc(32, True)
         self.blocks_multiply_xx_0 = blocks.multiply_vcc(1)
         self.blocks_complex_to_mag_0 = blocks.complex_to_mag(1)
@@ -93,14 +92,14 @@ class top_block(grc_wxgui.top_block_gui):
         ##################################################
         # Connections
         ##################################################
-        self.connect((self.analog_sig_source_x_0, 0), (self.blocks_multiply_xx_0, 0))    
-        self.connect((self.blocks_complex_to_mag_0, 0), (self.decoder, 0))    
-        self.connect((self.blocks_multiply_xx_0, 0), (self.low_pass_filter_0, 0))    
-        self.connect((self.dc_blocker_xx_0, 0), (self.blocks_multiply_xx_0, 1))    
-        self.connect((self.low_pass_filter_0, 0), (self.blocks_complex_to_mag_0, 0))    
-        self.connect((self.osmosdr_source_0, 0), (self.dc_blocker_xx_0, 0))    
-        self.connect((self.blocks_complex_to_mag_0, 0), (self.wxgui_scopesink2_0, 0))    
-        
+        self.connect((self.analog_sig_source_x_0, 0), (self.blocks_multiply_xx_0, 0))
+        self.connect((self.blocks_complex_to_mag_0, 0), (self.decoder, 0))
+        self.connect((self.blocks_multiply_xx_0, 0), (self.low_pass_filter_0, 0))
+        self.connect((self.dc_blocker_xx_0, 0), (self.blocks_multiply_xx_0, 1))
+        self.connect((self.low_pass_filter_0, 0), (self.blocks_complex_to_mag_0, 0))
+        self.connect((self.osmosdr_source_0, 0), (self.dc_blocker_xx_0, 0))
+        self.connect((self.blocks_complex_to_mag_0, 0), (self.wxgui_scopesink2_0, 0))
+
     def get_samp_rate(self):
         return self.samp_rate
 

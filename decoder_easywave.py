@@ -32,12 +32,13 @@ from optparse import OptionParser
 import osmosdr
 import time
 import wx
-from decoders import decoder_selectplus
+from decoders import decoder_easywave
+import math
 from optparse import OptionParser
 
 class top_block(grc_wxgui.top_block_gui):
 
-  def __init__(self, input_filename=None, freq_offset=-420000, freq_center=433500000):
+  def __init__(self, input_filename=None, freq_offset=-300000, freq_center=868000000):
     grc_wxgui.top_block_gui.__init__(self, title="Top Block")
     self.input_filename = input_filename
     _icon_path = "/usr/share/icons/hicolor/32x32/apps/gnuradio-grc.png"
@@ -49,25 +50,26 @@ class top_block(grc_wxgui.top_block_gui):
     self.samp_rate = samp_rate = 2000000
     self.freq_transition = freq_transition = 10000
     self.freq_offset = freq_offset
-    self.freq_cutoff = freq_cutoff = 50000
+    self.freq_cutoff = freq_cutoff = 60000
     self.freq_center = freq_center
+    self.fsk_deviation_hz = fsk_deviation_hz = 32000
 
     ##################################################
     # Blocks
     ##################################################
     self.wxgui_scopesink2_0 = scopesink2.scope_sink_f(
-      self.GetWin(),
-      title="Scope Plot",
-      sample_rate=samp_rate,
+    	self.GetWin(),
+    	title="Scope Plot",
+    	sample_rate=samp_rate,
       size=(1920/2,1060/2),
-      v_scale=0.2,
-      v_offset=0.6,
-      t_scale=0.001,
-      ac_couple=False,
-      xy_mode=False,
-      num_inputs=1,
-      trig_mode=wxgui.TRIG_MODE_AUTO,
-      y_axis_label="signal",
+    	v_scale=0.2,
+    	v_offset=0.6,
+    	t_scale=0.001,
+    	ac_couple=False,
+    	xy_mode=False,
+    	num_inputs=2,
+    	trig_mode=wxgui.TRIG_MODE_AUTO,
+    	y_axis_label="signal",
     )
     self.wxgui_scopesink2_0.set_trigger_level(0.1)
     self.Add(self.wxgui_scopesink2_0.win)
@@ -80,21 +82,24 @@ class top_block(grc_wxgui.top_block_gui):
       self.osmosdr_source_0.set_dc_offset_mode(0, 0)
       self.osmosdr_source_0.set_iq_balance_mode(0, 0)
       self.osmosdr_source_0.set_gain_mode(False, 0)
-      self.osmosdr_source_0.set_gain(0, 0)
+      self.osmosdr_source_0.set_gain(14, 0)
       self.osmosdr_source_0.set_if_gain(40, 0)
       self.osmosdr_source_0.set_bb_gain(20, 0)
       self.osmosdr_source_0.set_antenna("", 0)
       self.osmosdr_source_0.set_bandwidth(0, 0)
+
       self.dc_blocker_xx_0 = filter.dc_blocker_cc(32, True)
     else:
       self.blocks_throttle_0 = blocks.throttle(gr.sizeof_gr_complex*1, samp_rate,True)
-      self.blocks_file_source_0 = blocks.file_source(gr.sizeof_gr_complex*1, input_filename, True)
+      self.blocks_file_source_0 = blocks.file_source(gr.sizeof_gr_complex*1, input_filename, False)
 
     self.blocks_multiply_xx_0 = blocks.multiply_vcc(1)
     self.analog_sig_source_x_0 = analog.sig_source_c(samp_rate, analog.GR_COS_WAVE, freq_offset, 1, 0)
+    self.low_pass_filter_1 = filter.fir_filter_fff(1, firdes.low_pass(1, samp_rate, 20000, 20000, firdes.WIN_HAMMING, 6.76))
     self.low_pass_filter_0 = filter.fir_filter_ccf(1, firdes.low_pass(1, samp_rate, freq_cutoff, freq_transition, firdes.WIN_HAMMING, 6.76))
+    self.decoder = decoder_easywave(samp_rate)
+    self.analog_quadrature_demod_cf_0 = analog.quadrature_demod_cf(samp_rate/(2*math.pi*fsk_deviation_hz/8.0))
     self.blocks_complex_to_mag_0 = blocks.complex_to_mag(1)
-    self.decoder = decoder_selectplus(samp_rate)
 
     ##################################################
     # Connections
@@ -108,9 +113,13 @@ class top_block(grc_wxgui.top_block_gui):
 
     self.connect((self.analog_sig_source_x_0, 0), (self.blocks_multiply_xx_0, 0))
     self.connect((self.blocks_multiply_xx_0, 0), (self.low_pass_filter_0, 0))
+    self.connect((self.low_pass_filter_0, 0), (self.analog_quadrature_demod_cf_0, 0))
     self.connect((self.low_pass_filter_0, 0), (self.blocks_complex_to_mag_0, 0))
-    self.connect((self.blocks_complex_to_mag_0, 0), (self.decoder, 0))
-    self.connect((self.blocks_complex_to_mag_0, 0), (self.wxgui_scopesink2_0, 0))
+    self.connect((self.analog_quadrature_demod_cf_0, 0), (self.low_pass_filter_1, 0))
+    self.connect((self.low_pass_filter_1, 0), (self.wxgui_scopesink2_0, 0))
+    self.connect((self.low_pass_filter_1, 0), (self.decoder, 0))
+    self.connect((self.blocks_complex_to_mag_0, 0), (self.decoder, 1))
+    self.connect((self.blocks_complex_to_mag_0, 0), (self.wxgui_scopesink2_0, 1))
 
   def get_samp_rate(self):
     return self.samp_rate
@@ -118,7 +127,9 @@ class top_block(grc_wxgui.top_block_gui):
   def set_samp_rate(self, samp_rate):
     self.samp_rate = samp_rate
     self.analog_sig_source_x_0.set_sampling_freq(self.samp_rate)
+    self.analog_quadrature_demod_cf_0.set_gain(self.samp_rate/(2*math.pi*self.fsk_deviation_hz/8.0))
     self.low_pass_filter_0.set_taps(firdes.low_pass(1, self.samp_rate, self.freq_cutoff, self.freq_transition, firdes.WIN_HAMMING, 6.76))
+    self.low_pass_filter_1.set_taps(firdes.low_pass(1, self.samp_rate, 20000, 20000, firdes.WIN_HAMMING, 6.76))
     self.osmosdr_source_0.set_sample_rate(self.samp_rate)
     self.decoder.set_sample_rate(self.samp_rate)
     self.wxgui_scopesink2_0.set_sample_rate(self.samp_rate)
@@ -151,11 +162,12 @@ class top_block(grc_wxgui.top_block_gui):
     self.freq_center = freq_center
     self.osmosdr_source_0.set_center_freq(self.freq_center, 0)
 
+
 def main(top_block_cls=top_block, options=None):
   parser = OptionParser()
   parser.add_option("-i", "--input-filename", type="string", default=None, help="specify input-filename [default=%default]")
-  parser.add_option("--freq-offset", type="int", default=-520000, help="specify freq-offset [default=%default]")
-  parser.add_option("--freq-center", type="int", default=433500000, help="specify freq-center [default=%default]")
+  parser.add_option("--freq-offset", type="int", default=-300000, help="specify freq-offset [default=%default]")
+  parser.add_option("--freq-center", type="int", default=868000000, help="specify freq-center [default=%default]")
   (options, args) = parser.parse_args()
   #print options.input_filename
   tb = top_block_cls(options.input_filename, options.freq_offset, options.freq_center)

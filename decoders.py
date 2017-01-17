@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 ##################################################
-# GNU Radio HomeEasy Remote decoder 
+# GNU Radio HomeEasy Remote decoder
 # Author: Martijn Berntsen
-# 
+#
 ##################################################
 
 from gnuradio import gr
@@ -10,6 +10,7 @@ import numpy as np
 import sys
 from string import maketrans
 import json
+import protocols
 
 class decoder_base(gr.basic_block):
     def __init__(self, name='base decoder', threshold=0.1):  # only default arguments here
@@ -92,7 +93,13 @@ class decoder_base_fsk(gr.basic_block):
           return []
 
     def newCode(self):
-      pass
+        if self.oldcode <> self.code:
+          self.counts = 0
+          print ''
+        self.counts = self.counts + 1
+        sys.stdout.write('\r%s : %s x %d' % (len(self.code), self.code, self.counts))
+        sys.stdout.flush()
+        self.oldcode = self.code
 
 class decoder_base_debug(decoder_base):
   def __init__(self, name='base debug decoder', threshold=0.1):
@@ -185,7 +192,7 @@ class decoder_homeeasy(decoder_base_debug):
               self.code = ''
           oldi = i
         self.pulsecounter = oldi - len(input_items[0])
-          
+
         self.consume(0, len(input_items[0]))
         return 0
 
@@ -201,7 +208,7 @@ class decoder_selectplus(decoder_base):
     def __init__(self, sample_rate=32000):  # only default arguments here
         super(decoder_selectplus, self).__init__(
             name='SelectPlus decoder',
-            threshold = 0.1
+            threshold = 0.5
         )
         self.sample_rate = sample_rate
 
@@ -213,26 +220,123 @@ class decoder_selectplus(decoder_base):
         for v, i in self.find_edges(input_items):
           length = i - oldi
           if v == True:
+            if length > self.sample_rate * 0.0015:
+              self.code = ''
+
+          if v == False:
             #space finished
+            #print length, self.sample_rate * 0.0007, self.sample_rate * 0.0015, self.code
             if length < self.sample_rate * 0.0007:
-              self.code = self.code + '1'
-            elif length < self.sample_rate * 0.0015:
               self.code = self.code + '0'
-            else:
-              if (len(self.code) == 17):
-                self.newCode()
+            elif length < self.sample_rate * 0.0015:
+              self.code = self.code + '1'
+            #else:
+            #  self.code = ''
+            if (len(self.code) == 18):
+              self.newCode()
               self.code = ''
           oldi = i
         self.pulsecounter = oldi - len(input_items[0])
-        #check if ongoing space is long enough for closure
-        if (self.pulsecounter < self.sample_rate * -0.0015) and \
-           (self.lastlevel == False):
-          if (len(self.code) == 17):
-            self.newCode()
-          self.code = ''
-          
+
         self.consume(0, len(input_items[0]))
         return 0
+
+class encoder_selectplus(gr.basic_block):
+  def __init__(self, sample_rate=32000):  # only default arguments here
+    super(encoder_selectplus, self).__init__(
+        name='SelectPlus encoder',
+        in_sig=[],
+        out_sig=[np.float32]
+    )
+    self.sample_rate = sample_rate
+    self.code = '000010100000001111'
+    self.samplesleft = 0
+    self.state = 0
+    self.code_index = 0
+    self.oldstate = -1
+    self.running = False
+
+  def set_sample_rate(self, samp_rate):
+    self.sample_rate = sample_rate
+
+  def start_sending(self):
+    self.running = True
+
+  def stop_sending(self):
+    self.running = False
+
+  def general_work(self, input_items, output_items):
+    out = output_items[0]
+    i = 0
+    while (i < len(out)):
+      r = len(out) - i
+      if (self.state == 0):
+        if (self.running):
+          self.state = 5
+        else:
+          out[i:] = [0] * r
+          i = i + r
+      elif (self.state == 5):
+        if (self.code_index == len(self.code)):
+          # code completed
+          self.state = 100
+        else:
+          self.state = 10
+      elif (self.state == 10):
+        if (self.code[self.code_index] == '1'):
+          self.samplesleft = int(self.sample_rate * 0.000344)
+        else:
+          self.samplesleft = int(self.sample_rate * 0.001136)
+        self.state = 20
+      elif (self.state == 20):
+        if (r < self.samplesleft):
+          # much more work
+          out[i:] = [0] * r
+          self.samplesleft = self.samplesleft - r
+          i = i + r
+        else:
+          # bit more work
+          out[i:i+self.samplesleft] = [0] *  self.samplesleft
+          i = i + self.samplesleft
+          self.state = 30
+      elif (self.state == 30):
+        if (self.code[self.code_index] == '1'):
+          self.samplesleft = int(self.sample_rate * 0.001136)
+        else:
+          self.samplesleft = int(self.sample_rate * 0.000344)
+        self.state = 40
+      elif (self.state == 40):
+        if (r < self.samplesleft):
+          # much more work
+          out[i:] = [1] * r
+          self.samplesleft = self.samplesleft - r
+          i = i + r
+        else:
+          # bit more work
+          out[i:i+self.samplesleft] = [1] *  self.samplesleft
+          i = i + self.samplesleft
+          self.code_index = self.code_index + 1
+          self.state = 5
+      elif (self.state == 100):
+        self.samplesleft = int(self.sample_rate * 0.005500)
+        self.state = 110
+      elif (self.state == 110):
+        if (r < self.samplesleft):
+          # much more work
+          out[i:] = [0] * r
+          self.samplesleft = self.samplesleft - r
+          i = i + r
+        else:
+          # bit more work
+          out[i:i+self.samplesleft] = [0] *  self.samplesleft
+          i = i + self.samplesleft
+          self.code_index = 0
+          self.state = 0
+      #if (self.state <> self.oldstate):
+      #  print self.state
+      #  self.oldstate = self.state
+
+    return len(out)
 
 ##################################################
 # Protocol timing Elro ab440r:
@@ -275,7 +379,7 @@ class decoder_elro_ab440r(decoder_base):
           if (len(self.code) == 17):
             self.newCode()
           self.code = ''
-          
+
         self.consume(0, len(input_items[0]))
         return 0
 
@@ -283,7 +387,7 @@ class decoder_elro_ab440r(decoder_base):
         self.buffer = np.append(self.buffer, b)
 
         refvalue = (np.min(b) + np.max(b)) // 2
-        
+
         indexes = np.arange(len(self.buffer), dtype=np.int)
         # get indexes with low values
         i_l = indexes[self.buffer < refvalue]
@@ -305,7 +409,7 @@ class decoder_elro_ab440r(decoder_base):
           # calculate pulse widths
           width_h = t_hl - t_lh# / (bitrate / 1000)
           width_l = t_lh[1:] - t_hl[0:-1]# / (bitrate / 1000)
-          
+
           s = ''
           oldi = 0
           last_sample = 0
@@ -374,19 +478,148 @@ class decoder_dio(decoder_base):
             elif length < self.sample_rate * 0.005:
               self.code = ''
             if (len(self.code) == 64):
-              self.code = self.code[::2] #manchester style
-              self.code = {'address': int(self.code[0:26], 2),
-                           'global' : int(self.code[26:27], 2),
-                           'state'  : int(self.code[27:28], 2),
-                           'slider' : int(self.code[28:30], 2),
-                           'button' : int(self.code[30:32], 2)}
+              #print self.code;
+              #self.code = self.code[::2] #manchester style
+              #self.code = {'address': int(self.code[0:26], 2),
+              #             'global' : int(self.code[26:27], 2),
+              #             'state'  : int(self.code[27:28], 2),
+              #             'slider' : int(self.code[28:30], 2),
+              #             'button' : int(self.code[30:32], 2)}
+              self.code = protocols.protocol_dio.fromstring(self.code)
               self.newCode()
               self.code = ''
           oldi = i
         self.pulsecounter = oldi - len(input_items[0])
-          
+
         self.consume(0, len(input_items[0]))
         return 0
+
+class encoder_dio(gr.basic_block):
+  def __init__(self, sample_rate=32000):
+    super(encoder_dio, self).__init__(
+        name='test',
+        in_sig=[],
+        out_sig=[np.float32]
+    )
+    self.sample_rate = sample_rate
+    self.code = '0101011010011010010110010110100101101010010101011001011001010101'
+    self.samplesleft = 0
+    self.state = 0
+    self.code_index = 0
+    self.oldstate = -1
+    self.running = False
+
+  def set_sample_rate(self, samp_rate):
+    self.sample_rate = sample_rate
+
+  def start_sending(self):
+    self.running = True
+
+  def stop_sending(self):
+    self.running = False
+
+  def general_work(self, input_items, output_items):
+    out = output_items[0]
+    i = 0
+    while (i < len(out)):
+      r = len(out) - i
+      if (self.state == 0):
+        if (self.running):
+          self.state = 1
+        else:
+          out[i:] = [0] * r
+          i = i + r
+      elif (self.state == 1):
+        # start first pulse
+        self.samplesleft = int(self.sample_rate * 0.000229)
+        self.state = 2
+      elif (self.state == 2):
+        # wait for first pulse to finish
+        if (r < self.samplesleft):
+          # much more work
+          out[i:] = [1] * r
+          self.samplesleft = self.samplesleft - r
+          i = i + r
+        else:
+          # bit more work
+          out[i:i+self.samplesleft] = [1] * self.samplesleft
+          i = i + self.samplesleft
+          self.state = 4
+      elif (self.state == 4):
+        # start begin mark
+        self.samplesleft = int(self.sample_rate * 0.002661)
+        self.state = 6
+      elif (self.state == 6):
+        if (r < self.samplesleft):
+          # much more work
+          out[i:] = [0] * r
+          self.samplesleft = self.samplesleft - r
+          i = i + r
+        else:
+          # bit more work
+          out[i:i+self.samplesleft] = [0] * self.samplesleft
+          i = i + self.samplesleft
+          self.state = 8
+      if (self.state == 8):
+        # start pulse
+        self.samplesleft = int(self.sample_rate * 0.000229)
+        self.state = 9
+      elif (self.state == 9):
+        # wait for pulse to finish
+        if (r < self.samplesleft):
+          # much more work
+          out[i:] = [1] * r
+          self.samplesleft = self.samplesleft - r
+          i = i + r
+        else:
+          # bit more work
+          out[i:i+self.samplesleft] = [1] * self.samplesleft
+          i = i + self.samplesleft
+          self.state = 10
+      elif (self.state == 10):
+        if (self.code_index == len(self.code)):
+          # code completed
+          self.state = 100
+        else:
+          # code bits remaining
+          if (self.code[self.code_index] == '0'):
+            self.samplesleft = int(self.sample_rate * 0.000306)
+          else:
+            self.samplesleft = int(self.sample_rate * 0.001306)
+          self.state = 12
+      elif (self.state == 12):
+        if (r < self.samplesleft):
+          # much more work
+          out[i:] = [0] * r
+          self.samplesleft = self.samplesleft - r
+          i = i + r
+        else:
+          # bit more work
+          out[i:i+self.samplesleft] = [0] *  self.samplesleft
+          i = i + self.samplesleft
+          self.code_index = self.code_index + 1
+          self.state = 8
+      elif (self.state == 100):
+        self.samplesleft = int(self.sample_rate * 0.01)
+        self.state = 102
+      elif (self.state == 102):
+        if (r < self.samplesleft):
+          # much more work
+          out[i:] = [0] * r
+          self.samplesleft = self.samplesleft - r
+          i = i + r
+        else:
+          # bit more work
+          out[i:i+self.samplesleft] = [0] *  self.samplesleft
+          i = i + self.samplesleft
+          self.code_index = 0
+          self.state = 0
+      #if (self.state <> self.oldstate):
+      #  print self.state
+      #  self.oldstate = self.state
+
+    #return produced
+    return len(out)
 
 ##################################################
 # Protocol timing Smart key fob:
@@ -450,18 +683,20 @@ class decoder_smart(decoder_base_fsk):
                          'rolling': int(self.code[56:104], 2)}
             self.newCode()
           self.code = ''
-          
+
         self.consume(0, samp_length)
         self.consume(1, samp_length)
         return 0
 
 ##################################################
 # Protocol timing DIO:
-# mark    short :   146 us = 0
-#         long  :   438 us = 1
+# mark    short :   146 us = 1
+#         long  :   438 us = 0
 # space   short :   146 us
 #         long  :   438 us
 #         xl    :  4000 us = message spacing
+#
+# short mark is followed by long space and viceversa (?)
 ##################################################
 class decoder_impuls(decoder_base):
     def __init__(self, sample_rate=32000):  # only default arguments here
@@ -480,8 +715,6 @@ class decoder_impuls(decoder_base):
           length = i - oldi
           if v == True:
             if length > self.sample_rate * 0.003:
-              if (len(self.code) == 25):
-                self.newCode()
               self.code = ''
           else:
             if length < self.sample_rate * 0.0001:
@@ -490,17 +723,152 @@ class decoder_impuls(decoder_base):
               self.code = self.code + '1'
             else:
               self.code = self.code + '0'
+            if (len(self.code) == 25):
+              self.code = protocols.protocol_impuls.fromstring(self.code)
+              #address = int(self.code[0:10][::2], 2) ^ 0b11111
+              #keys = int(self.code[11:21][::2], 2)
+              #off = int(self.code[21])
+              #on = int(self.code[23])
+              #self.code = {'address': address,
+              #             'keys'    : keys,
+              #             'off'    : off,
+              #             'on'  : on}
+              self.newCode()
+              self.code = ''
           oldi = i
         self.pulsecounter = oldi - len(input_items[0])
-        #check if ongoing space is long enough for closure
-        if (self.pulsecounter < self.sample_rate * -0.003) and \
-           (self.lastlevel == False):
-          if (len(self.code) == 25):
-            self.newCode()
-          self.code = ''
-          
+
         self.consume(0, len(input_items[0]))
         return 0
+
+class encoder_impuls(gr.basic_block):
+  def __init__(self, sample_rate=32000):
+    super(encoder_impuls, self).__init__(
+        name='test',
+        in_sig=[],
+        out_sig=[np.float32]
+    )
+    self.sample_rate = sample_rate
+    self.code = '1000000010101010101110111'
+    self.samplesleft = 0
+    self.state = 0
+    self.code_index = 0
+    self.oldstate = -1
+    self.running = False
+
+  def set_sample_rate(self, samp_rate):
+    self.sample_rate = sample_rate
+
+  def start_sending(self):
+    self.running = True
+
+  def stop_sending(self):
+    self.running = False
+
+  def general_work(self, input_items, output_items):
+    out = output_items[0]
+    i = 0
+    while (i < len(out)):
+      r = len(out) - i
+      if (self.state == 0):
+        if (self.running):
+          self.state = 1
+        else:
+          out[i:] = [0] * r
+          i = i + r
+      elif (self.state == 1):
+        if (self.code_index == len(self.code)):
+          # code completed
+          self.state = 100
+        else:
+          self.state = 5
+      elif (self.state == 5):
+        if (self.code[self.code_index] == '1'):
+          self.state = 10
+        else:
+          self.state = 20
+      elif (self.state == 10):
+        self.samplesleft = int(self.sample_rate * 0.000146)
+        self.state = 12
+      elif (self.state == 12):
+        # wait for mark to finish
+        if (r < self.samplesleft):
+          # much more work
+          out[i:] = [1] * r
+          self.samplesleft = self.samplesleft - r
+          i = i + r
+        else:
+          # bit more work
+          out[i:i+self.samplesleft] = [1] * self.samplesleft
+          i = i + self.samplesleft
+          self.state = 14
+      elif (self.state == 14):
+        self.samplesleft = int(self.sample_rate * 0.000436)
+        self.state = 16
+      elif (self.state == 16):
+        # wait for space to finish
+        if (r < self.samplesleft):
+          # much more work
+          out[i:] = [0] * r
+          self.samplesleft = self.samplesleft - r
+          i = i + r
+        else:
+          # bit more work
+          out[i:i+self.samplesleft] = [0] * self.samplesleft
+          i = i + self.samplesleft
+          self.code_index = self.code_index + 1
+          self.state = 1
+      elif (self.state == 20):
+        self.samplesleft = int(self.sample_rate * 0.000436)
+        self.state = 22
+      elif (self.state == 22):
+        # wait for mark to finish
+        if (r < self.samplesleft):
+          # much more work
+          out[i:] = [1] * r
+          self.samplesleft = self.samplesleft - r
+          i = i + r
+        else:
+          # bit more work
+          out[i:i+self.samplesleft] = [1] * self.samplesleft
+          i = i + self.samplesleft
+          self.state = 24
+      elif (self.state == 24):
+        self.samplesleft = int(self.sample_rate * 0.000146)
+        self.state = 26
+      elif (self.state == 26):
+        # wait for space to finish
+        if (r < self.samplesleft):
+          # much more work
+          out[i:] = [0] * r
+          self.samplesleft = self.samplesleft - r
+          i = i + r
+        else:
+          # bit more work
+          out[i:i+self.samplesleft] = [0] * self.samplesleft
+          i = i + self.samplesleft
+          self.code_index = self.code_index + 1
+          self.state = 1
+      elif (self.state == 100):
+        self.samplesleft = int(self.sample_rate * 0.004)
+        self.state = 102
+      elif (self.state == 102):
+        if (r < self.samplesleft):
+          # much more work
+          out[i:] = [0] * r
+          self.samplesleft = self.samplesleft - r
+          i = i + r
+        else:
+          # bit more work
+          out[i:i+self.samplesleft] = [0] *  self.samplesleft
+          i = i + self.samplesleft
+          self.code_index = 0
+          self.state = 0
+      #if (self.state <> self.oldstate):
+      #  print self.state
+      #  self.oldstate = self.state
+
+    return len(out)
 
 ##################################################
 # Protocol timing Smart key fob:
@@ -576,9 +944,9 @@ class decoder_volvo(decoder_base_fsk):
             #print self.code[-82:-2], 'T' # rolling code part
           #else:
             #print self.code[-82:-2] # rolling code part
-          #print self.code[-238:]        
+          #print self.code[-238:]
           #self.newCode()
-          
+
         self.consume(0, samp_length)
         self.consume(1, samp_length)
         return 0
@@ -612,7 +980,7 @@ class decoder_bel8006(decoder_base):
         for i in self.code[1:-2]:
           c = c ^ i
         return c == self.code[-1]
-                  
+
 
     def general_work(self, input_items, output_items):
         oldi = self.pulsecounter
@@ -658,16 +1026,21 @@ class decoder_bel8006(decoder_base):
                   self.code = []
           oldi = i
         self.pulsecounter = oldi - len(input_items[0])
-          
+
         self.consume(0, len(input_items[0]))
         return 0
 
+##################################################
+# Protocol timing Symbol wireless barcode scanner:
+#
+# message starts with 010101010101010
+##################################################
 class decoder_symbol(decoder_base_fsk):
     def __init__(self, sample_rate=32000):  # only default arguments here
         super(decoder_symbol, self).__init__(
             name='symbol barcode scanner decoder',
             threshold = 0,
-            threshold2 = 0.005
+            threshold2 = 0.2
         )
         self.sample_rate = sample_rate
         self.is_decoding = False
@@ -684,42 +1057,15 @@ class decoder_symbol(decoder_base_fsk):
         for v, i in self.find_edges(input_items):
           length = i - oldi
           if v == True:
-            self.code = self.code + '0' * round(length / 96.0)
-#            print 'L %5.2f' % (length / 96.0)
+            self.code = self.code + '0' * int(round(length / 96.0))
           else:
-            self.code = self.code + '1' * round(length / 105.0)
-#            print 'H %5.2f' % (length / 105.0)
-#          print v, length
-#          if length > 200:
-#            if (v == True) and self.is_decoding:
-#              #space finished
-#              if length < self.sample_rate * 0.000375:
-#                self.code = self.code + '0'
-#              elif length < self.sample_rate * 0.001:
-#                self.code = self.code + '00'
-#            elif (v == False):
-#              #mark finished
-#              if length < self.sample_rate * 0.000375:
-#                if self.is_decoding:
-#                  self.code = self.code + '1'
-#              elif length < self.sample_rate * 0.001:
-#                if self.is_decoding:
-#                  self.code = self.code + '11'
-#              else:
-#                self.code = ''
+            self.code = self.code + '1' * int(round(length / 105.0))
           oldi = i
         self.pulsecounter = oldi - len(input_items[0])
         if (not self.signalvalid) and (self.is_decoding):
           self.is_decoding = False
           print self.code
-          #self.code = self.code[::2]
-          #if (len(self.code) == 104):
-          #  self.code = {'address': int(self.code[:48], 2),
-          #               'key'    : int(self.code[48:56], 2),
-          #               'rolling': int(self.code[56:104], 2)}
-          #  self.newCode()
-          #self.code = ''
-          
+
         self.consume(0, samp_length)
         self.consume(1, samp_length)
         return 0
@@ -773,7 +1119,7 @@ class decoder_gate1(decoder_base):
                 self.code = self.code[::3]
                 self.code = {
                   'serial': int(self.code[0:32], 2),
-                  'rolling': int(self.code[32:64], 2)}
+                  'rolling': int(self.code[32:64],)}
                 self.newCode()
               self.code = ''
           oldi = i
@@ -786,10 +1132,75 @@ class decoder_gate1(decoder_base):
             self.code = self.code[::3]
             self.code = {
               'serial': int(self.code[0:32], 2),
-              'rolling': int(self.code[32:64], 2)}
+              'rolling': int(self.code[32:64])}
             self.newCode()
           self.code = ''
-          
+
         self.consume(0, len(input_items[0]))
         return 0
 
+##################################################
+# Protocol timing Niko Easywave:
+# mark    short :   507 us = 1
+#         long  :  1114 us = 11
+# space   short :   507 us = 0
+#         long  :  1114 us = 00
+#         xl    :  5070 us = message spacing
+##################################################
+class decoder_easywave(decoder_base_fsk):
+    def __init__(self, sample_rate=32000):  # only default arguments here
+        super(decoder_easywave, self).__init__(
+            name='Easywave remote decoder',
+            threshold = 0,
+            threshold2 = 0.1
+        )
+        self.sample_rate = sample_rate
+        self.is_decoding = False
+
+    def set_sample_rate(self, samp_rate):
+        self.sample_rate = sample_rate
+
+    def general_work(self, input_items, output_items):
+        samp_length = min(len(input_items[0]), len(input_items[1]))
+        oldi = self.pulsecounter
+        if self.signalvalid and not self.is_decoding:
+          self.is_decoding = True
+          self.code = ''
+        for v, i in self.find_edges(input_items):
+          length = i - oldi
+          if self.is_decoding:
+            if (v == True) and self.is_decoding:
+              #space finished
+              if length < self.sample_rate * 0.000407:
+                pass
+              if length < self.sample_rate * 0.000750:
+                self.code = self.code + '1'
+              elif length < self.sample_rate * 0.001500:
+                self.code = self.code + '11'
+              else:
+                self.code = ''
+            elif (v == False):
+              #mark finished
+              if length < self.sample_rate * 0.000407:
+                pass
+              if length < self.sample_rate * 0.000750:
+                self.code = self.code + '0'
+              elif length < self.sample_rate * 0.001500:
+                self.code = self.code + '00'
+              #else:
+              #  self.code = self.code + 'X'
+            if len(self.code) == 64:
+              self.code = self.code + '1'
+            if len(self.code) == 65:
+              self.code = self.code[1:]
+              self.code = protocols.protocol_easywave.fromstring(self.code)
+              self.newCode()
+              self.code = ''
+          oldi = i
+        self.pulsecounter = oldi - len(input_items[0])
+        if (not self.signalvalid) and (self.is_decoding):
+          self.is_decoding = False
+
+        self.consume(0, samp_length)
+        self.consume(1, samp_length)
+        return 0
